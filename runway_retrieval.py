@@ -1,13 +1,3 @@
-
-"""\
-Runway ??????
-
-- ??: retrieval/sbert-base-nli-mean-tokens
-- ??: retrieval/runway-1 ????? runway-document.json, runway-queries.json, train.csv, dev.csv, test.csv
-- ??: ????-??-???????? SBERT ????
-- ??: ??????? MRR / NDCG / Precision / Recall@K???????
-"""
-
 import os
 import json
 import random
@@ -33,15 +23,12 @@ from sentence_transformers import models as st_models
 from sentence_transformers.evaluation import InformationRetrievalEvaluator
 
 
-# ==================== ??????? ====================
-
 def configure_matplotlib_fonts() -> None:
-    """Configure matplotlib font fallback to avoid findfont warnings and Chinese glyph boxes."""
     font_paths = [
-        r"C:\Windows\Fonts\msyh.ttc",  # Microsoft YaHei
+        r"C:\Windows\Fonts\msyh.ttc",
         r"C:\Windows\Fonts\msyhbd.ttc",
-        r"C:\Windows\Fonts\simhei.ttf",  # SimHei
-        r"C:\Windows\Fonts\simsun.ttc",  # SimSun
+        r"C:\Windows\Fonts\simhei.ttf",
+        r"C:\Windows\Fonts\simsun.ttc",
     ]
     candidate_names = [
         "Microsoft YaHei",
@@ -76,33 +63,27 @@ def configure_matplotlib_fonts() -> None:
     rcParams["axes.unicode_minus"] = False
 
 
-# Configure fonts once at startup.
 configure_matplotlib_fonts()
 
-# ????
 SEED = 42
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
-# ??? GPU 0?2?3????? CUDA_VISIBLE_DEVICES=0,2,3?
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
 
-# ????????? main ?????? DDP ????
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 
-# ???? Faiss ????
 try:
-    import faiss  # type: ignore
+    import faiss
 
     FAISS_AVAILABLE = True
     print("Faiss available for fast retrieval")
-except ImportError:  # pragma: no cover - ??? faiss ?????
+except ImportError:
     FAISS_AVAILABLE = False
     print("Faiss not available, will use batch computation instead")
 
-# ?? Hugging Face ????????????
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_DATASETS_OFFLINE"] = "1"
 os.environ["HF_HUB_OFFLINE"] = "1"
@@ -111,8 +92,6 @@ print("Offline mode activated: Hugging Face network access disabled.")
 
 
 class GeometryBridge(nn.Module):
-    """Geometry bridge between transformer and pooling: low-rank bottleneck + residual gate."""
-
     def __init__(
         self,
         hidden_size: int,
@@ -149,14 +128,14 @@ class GeometryBridge(nn.Module):
             "use_layernorm": self.use_layernorm,
         }
 
-    def save(self, output_path: str, *args, **kwargs) -> None:  # type: ignore[override]
+    def save(self, output_path: str, *args, **kwargs) -> None:
         os.makedirs(output_path, exist_ok=True)
         with open(os.path.join(output_path, "config.json"), "w", encoding="utf-8") as f:
             json.dump(self.get_config_dict(), f, ensure_ascii=False, indent=2)
         torch.save(self.state_dict(), os.path.join(output_path, "pytorch_model.bin"))
 
     @staticmethod
-    def load(input_path: str) -> "GeometryBridge":  # type: ignore[override]
+    def load(input_path: str) -> "GeometryBridge":
         with open(os.path.join(input_path, "config.json"), "r", encoding="utf-8") as f:
             cfg = json.load(f)
         module = GeometryBridge(
@@ -177,7 +156,6 @@ def enable_three_stage_encoder(
     rank_size: int = 192,
     alpha: float = 0.0,
 ) -> SentenceTransformer:
-    """Rebuild SentenceTransformer as: Transformer -> GeometryBridge -> MultiViewPooling -> Dense -> Normalize."""
     modules = list(model._modules.values())
     if not modules:
         return model
@@ -214,8 +192,6 @@ def enable_three_stage_encoder(
 
 
 class DomainKnowledgeBase:
-    """Domain KB with BM25-inspired lexical prefilter + dense rerank."""
-
     def __init__(
         self,
         records: List[Dict[str, Any]],
@@ -263,7 +239,6 @@ class DomainKnowledgeBase:
 
         self.avgdl = float(sum(self.doc_len) / len(self.doc_len)) if self.doc_len else 1.0
         for t, df_val in self.df.items():
-            # Standard BM25 IDF with +1 to keep positive values.
             self.idf[t] = float(np.log(1.0 + (self.N - df_val + 0.5) / (df_val + 0.5)))
 
     @staticmethod
@@ -371,8 +346,6 @@ class DomainKnowledgeBase:
 
 
 class DomainVectorFusion(nn.Module):
-    """Fuse original embedding and domain embedding: linear + non-linear activation."""
-
     def __init__(self, hidden_size: int) -> None:
         super().__init__()
         self.hidden_size = int(hidden_size)
@@ -388,8 +361,6 @@ class DomainVectorFusion(nn.Module):
 
 
 class DomainEnhancedEncoder:
-    """Inference/training-time encoder wrapper with BM25 prefilter + domain fusion."""
-
     def __init__(
         self,
         base_model: SentenceTransformer,
@@ -446,25 +417,7 @@ class DomainEnhancedEncoder:
         return fused.detach().cpu().numpy()
 
 
-# ==================== Runway ????? ====================
-
-
 class RunwayDataLoader:
-    """Runway ?????
-
-    ?????????:
-        data_dir/
-            runway-document.json   # ????: doc_id -> text
-            runway-queries.json    # ????: query_id -> text
-            train.csv              # query_id, doc_id, relevance
-            dev.csv
-            test.csv
-
-    CSV ????:
-        queries_68     document_68_1-3     5
-    ???????????? 1-5 ???????
-    """
-
     def __init__(self, data_dir: str = os.path.join("retrieval", "runway-1")):
         self.data_dir = data_dir
         self.corpus: Dict[str, str] = {}
@@ -475,14 +428,11 @@ class RunwayDataLoader:
             "test": {},
         }
 
-    # -------- ?????? --------
-
     def load_corpus(self) -> Dict[str, str]:
         path = os.path.join(self.data_dir, "runway-document.json")
         print(f"Loading corpus from {path} ...")
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # ???? json ????? doc_id
         self.corpus = {str(k): str(v) for k, v in data.items()}
         print(f"  Loaded {len(self.corpus)} documents")
         return self.corpus
@@ -497,12 +447,6 @@ class RunwayDataLoader:
         return self.queries
 
     def load_split_qrels(self, split: str) -> Dict[str, Dict[str, int]]:
-        """? train/dev/test CSV ??? qrels ???
-
-        ????: {query_id: {doc_id: relevance_int}}
-        ?????? > 0 ????
-        """
-
         assert split in {"train", "dev", "test"}
         path = os.path.join(self.data_dir, f"{split}.csv")
         print(f"Loading {split} qrels from {path} ...")
@@ -513,7 +457,6 @@ class RunwayDataLoader:
                 line = line.strip()
                 if not line:
                     continue
-                # ??????????? / ?????
                 parts = line.split()
                 if len(parts) < 3:
                     continue
@@ -521,7 +464,6 @@ class RunwayDataLoader:
                 try:
                     rel = int(rel_str)
                 except ValueError:
-                    # ?????????
                     continue
                 if rel <= 0:
                     continue
@@ -532,15 +474,10 @@ class RunwayDataLoader:
         print(f"  Loaded {len(self.qrels[split])} queries with {num_pairs} query-doc pairs for {split}")
         return self.qrels[split]
 
-    # -------- ?????? --------
-
     def create_training_samples(self, split: str = "train", num_negatives_per_pos: int = 1) -> List[InputExample]:
-        """?? qrels ?? Sentence-Transformers ? InputExample ???"""
-
         assert split in self.qrels, f"qrels for split '{split}' not loaded yet"
         qrels = self.qrels[split]
 
-        # ??? query ?????????????? corpus ?????????????
         all_doc_ids = list(self.corpus.keys())
 
         samples: List[InputExample] = []
@@ -551,20 +488,16 @@ class RunwayDataLoader:
                 continue
             query_text = self.queries[qid]
 
-            # ?? query ???? doc_id ??
             pos_doc_ids = {doc_id for doc_id, rel in doc_rels.items() if rel > 0 and doc_id in self.corpus}
             if not pos_doc_ids:
                 continue
 
             for doc_id in pos_doc_ids:
                 doc_text = self.corpus[doc_id]
-                # ????
                 samples.append(InputExample(texts=[query_text, doc_text], label=1.0))
 
-                # ???????????????????????? doc ?????
                 for _ in range(num_negatives_per_pos):
                     neg_doc_id = None
-                    # ????????????
                     for _retry in range(10):
                         candidate = random.choice(all_doc_ids)
                         if candidate not in pos_doc_ids:
@@ -584,30 +517,10 @@ class RunwayDataLoader:
         max_triplets_per_query: int | None = None,
         topk_docs: Dict[str, List[str]] | None = None,
     ) -> List[InputExample]:
-        """?? 1-5 ???????? (query, pos_doc, neg_doc) ????
-
-        - ???? query ??????? (d_i, d_j)??? rel_i != rel_j?
-          ??????????:
-              anchor = query ??
-              positive = ??????????
-              negative = ??????????
-          label = |rel_pos - rel_neg|???? TripletLoss ??? margin?
-          ??????????margin ???????????
-
-        - ????????????? max_triplets_per_query ???? query
-          ????????????????
-        """
-
-        # ?????? rel=0???? 0~5 ?????????
-        # - ??? split CSV (train/dev/test) ???? qid, doc_id, rel?
-        # - ??? query ????? rel ???????????????? 0?
-        # - ??????? rel=0??? label ??????????? Loss ??????
-
         csv_path = os.path.join(self.data_dir, f"{split}.csv")
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"Split file not found for triplet creation: {csv_path}")
 
-        # ??? split ???? 0~5 ???????? / ???
         raw_qrels: Dict[str, Dict[str, int]] = defaultdict(dict)
         with open(csv_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -633,13 +546,9 @@ class RunwayDataLoader:
             if qid not in self.queries:
                 continue
 
-            # ??? query ?? (doc_id, rel)???? corpus ???????
-            # ????????? rel>0 ??????????????
             items = []
             has_positive = False
 
-            # ????????????? Top-K ?????? Top-K ??????????
-            # ????????? vs ???????Top-K ??????
             allowed_docs = None
             if topk_docs is not None and qid in topk_docs:
                 allowed_docs = set(topk_docs[qid])
@@ -656,13 +565,11 @@ class RunwayDataLoader:
             if len(items) < 2 or not has_positive:
                 continue
 
-            # ??????????????? (? rel, ? rel) ?
             items.sort(key=lambda x: x[1], reverse=True)
 
             query_text = self.queries[qid]
             triplets_for_q: List[InputExample] = []
 
-            # ?????????????? rel>0 ??????? lower-rel / rel=0 ???????
             pos_items = [(doc_id, rel) for doc_id, rel in items if rel > 0]
             if not pos_items:
                 continue
@@ -699,7 +606,6 @@ class RunwayDataLoader:
                 lower_zero = [(doc_id, rel) for doc_id, rel in lower_items if rel == 0]
                 lower_nonzero = [(doc_id, rel) for doc_id, rel in lower_items if rel > 0]
 
-                # ?? hard zero ??
                 if lower_zero:
                     k_zero = min(num_zero_neg_per_pos, len(lower_zero))
                     sampled_zero = random.sample(lower_zero, k_zero)
@@ -718,7 +624,6 @@ class RunwayDataLoader:
                             )
                         )
 
-                # ?????????
                 if lower_nonzero:
                     k_posneg = min(num_pos_neg_per_pos, len(lower_nonzero))
                     sampled_posneg = random.sample(lower_nonzero, k_posneg)
@@ -745,7 +650,6 @@ class RunwayDataLoader:
 
             triplets.extend(triplets_for_q)
 
-        # ???? rel>0 ??????????? 60%???????? rel=0 ??????
         if triplets:
             nonzero_triplets: List[InputExample] = []
             zero_triplets: List[InputExample] = []
@@ -768,7 +672,6 @@ class RunwayDataLoader:
                 max_zero = int((2.0 / 3.0) * n_nonzero)
                 if n_zero > max_zero:
                     if max_zero > 0:
-                        # ? |label| ?????????????hard?? zero ???
                         zero_triplets.sort(
                             key=lambda ex: abs(float(ex.label)) if ex.label is not None else float("inf")
                         )
@@ -791,12 +694,6 @@ def mine_topk_docs_for_queries(
     batch_size: int = 128,
     use_faiss: bool = True,
 ) -> Dict[str, List[str]]:
-    """?????????????? query ?? Top-K ??????? hard negatives?
-
-    ??:
-        {query_id: [doc_id1, doc_id2, ..., doc_idK]}
-    """
-
     if not queries:
         return {}
 
@@ -809,7 +706,6 @@ def mine_topk_docs_for_queries(
 
     actual_top_k = min(top_k, len(corpus_ids))
 
-    # ??? L2 ????????
     corpus_emb = model.encode(
         corpus_texts,
         convert_to_tensor=True,
@@ -863,15 +759,7 @@ def mine_topk_docs_for_queries(
     return topk_result
 
 
-# ==================== ????? ====================
-
-
 class OptimizedRetrievalEvaluator:
-    """???????? - L2 ??? + ?? Faiss / ????????
-
-    ?????: MRR / NDCG / Recall / Precision
-    """
-
     def __init__(
         self,
         corpus: Dict[str, str],
@@ -897,11 +785,9 @@ class OptimizedRetrievalEvaluator:
         return 0.0
 
     def _ndcg(self, ranked: List[str], rel_dict: Dict[str, int], k: int) -> float:
-        """Graded NDCG: ?? qrels ???????????"""
         if not rel_dict:
             return 0.0
 
-        # ?? DCG????????? k ??????????
         dcg = 0.0
         for i, doc in enumerate(ranked[:k], 1):
             rel = rel_dict.get(doc, 0)
@@ -910,7 +796,6 @@ class OptimizedRetrievalEvaluator:
             gain = float(2**rel - 1)
             dcg += gain / float(np.log2(i + 1.0))
 
-        # ?? IDCG??? query ?????????????????
         rel_scores = [r for r in rel_dict.values() if r > 0]
         if not rel_scores:
             return 0.0
@@ -926,7 +811,6 @@ class OptimizedRetrievalEvaluator:
         return float(dcg / idcg)
 
     def _recall(self, ranked: List[str], relevant: set) -> float:
-        # As requested: use the exact same calculation as Precision.
         if not ranked:
             return 0.0
         return float(len(set(ranked) & relevant) / len(ranked))
@@ -1020,581 +904,13 @@ class OptimizedRetrievalEvaluator:
                         metrics["Recall"][k].append(self._recall(top_docs, relevant))
                         metrics["Precision"][k].append(self._precision(top_docs, relevant))
 
-        # ?????
-        aggregated: Dict[str, Dict[int, float]] = {}
-        for metric_name, vals in metrics.items():
-            aggregated[metric_name] = {}
-            for k, arr in vals.items():
-                aggregated[metric_name][k] = float(np.mean(arr)) if arr else 0.0
-
-        return aggregated
-
-
-# ==================== ????? Triplet Loss ====================
-
-
-class RelevanceAwareTripletLoss(torch.nn.Module):
-    """???? Triplet Loss?? margin ?????????
-
-    ?? (query, pos_doc, neg_doc) ??????? label = |rel_pos - rel_neg|?
-    ????????????
-
-        loss_i = max(0, margin_i + sim(a, n) - sim(a, p))
-
-    ???
-        margin_i = base_margin * (rel_diff_i / max_rel_diff)
-
-    ?????? 1~5 ??????
-    - rel_pos ? rel_neg ?????margin ?????????????"easy / hard negatives"??
-    - ???????semi-hard?margin ???????????
-    """
-
-    def __init__(
-        self,
-        model: SentenceTransformer,
-        knowledge_base: DomainKnowledgeBase | None = None,
-        fusion_module: DomainVectorFusion | None = None,
-        lexical_cache: Dict[str, np.ndarray] | None = None,
-        lexical_top_k: int = 30,
-        semantic_top_k: int = 4,
-        base_margin: float = 0.25,
-        max_rel_diff: float = 4.0,
-        max_zero_margin_ratio: float = 0.6,
-        weight_zero: float = 0.3,
-        weight_nonzero: float = 1.0,
-        isotropy_weight: float = 0.02,
-    ) -> None:
-        super().__init__()
-        self.model = model
-        self.knowledge_base = knowledge_base
-        self.fusion_module = fusion_module
-        self.lexical_cache = lexical_cache or {}
-        self.lexical_top_k = int(lexical_top_k)
-        self.semantic_top_k = int(semantic_top_k)
-        self.base_margin = float(base_margin)
-        self.max_rel_diff = float(max_rel_diff) if max_rel_diff > 0 else 1.0
-        self.max_zero_margin_ratio = float(max_zero_margin_ratio)
-        # ??: ?? rel=0 ???????? & ?? 0 ?????
-        self.weight_zero = float(weight_zero)
-        self.weight_nonzero = float(weight_nonzero)
-        self.isotropy_weight = float(isotropy_weight)
-
-    def _decode_texts_from_features(self, features: Dict[str, torch.Tensor]) -> List[str]:
-        transformer = self.model[0] if hasattr(self.model, "__getitem__") else None
-        tokenizer = getattr(transformer, "tokenizer", None) if transformer is not None else None
-        input_ids = features.get("input_ids")
-        if tokenizer is None or input_ids is None:
-            bsz = 0 if input_ids is None else int(input_ids.size(0))
-            return [""] * bsz
-        ids = input_ids.detach().cpu().tolist()
-        texts = tokenizer.batch_decode(ids, skip_special_tokens=True)
-        return [str(t).strip() for t in texts]
-
-    def _apply_domain_fusion(self, reps: torch.Tensor, texts: List[str]) -> torch.Tensor:
-        if self.knowledge_base is None or self.fusion_module is None:
-            return reps
-        self.fusion_module = self.fusion_module.to(reps.device)
-        out = []
-        for i, text in enumerate(texts):
-            key = str(text).strip()
-            precomputed = self.lexical_cache.get(key)
-            domain_vec = self.knowledge_base.retrieve_topk_embeddings(
-                query_text=text,
-                query_embedding=reps[i],
-                lexical_top_k=self.lexical_top_k,
-                semantic_top_k=self.semantic_top_k,
-                precomputed_candidates=precomputed,
-            )
-            fused = self.fusion_module(reps[i].unsqueeze(0), domain_vec.unsqueeze(0)).squeeze(0)
-            out.append(fused)
-        return torch.stack(out, dim=0)
-
-    def _isotropy_regularization(self, reps: List[torch.Tensor]) -> torch.Tensor:
-        z = torch.cat(reps, dim=0)
-        z = F.normalize(z, p=2, dim=-1)
-        if z.size(0) < 2:
-            return z.new_tensor(0.0)
-        cov = torch.matmul(z.T, z) / float(z.size(0))
-        eye = torch.eye(cov.size(0), device=cov.device, dtype=cov.dtype)
-        return torch.mean((cov - eye) ** 2)
-
-    def forward(self, sentence_features, labels: torch.Tensor):  # type: ignore[override]
-        # sentence_features: [features_anchor, features_pos, features_neg]
-        reps = [self.model(feat)["sentence_embedding"] for feat in sentence_features]
-        text_triplet = [self._decode_texts_from_features(feat) for feat in sentence_features]
-        # Speed-up mode: only fuse anchor branch during training.
-        reps[0] = self._apply_domain_fusion(reps[0], text_triplet[0])
-        anchor, positive, negative = reps
-
-        # ????????????
-        sim_pos = F.cosine_similarity(anchor, positive)
-        sim_neg = F.cosine_similarity(anchor, negative)
-
-        if labels is None:
-            # ???????????? margin
-            margin = self.base_margin
-            weight_vec = None
-        else:
-            raw_labels = labels.view(-1).to(anchor.device).float()
-            # ??: label<0 ??????????? rel=0???????
-            #       |label| = |rel_pos - rel_neg| ???????????
-            has_zero = (raw_labels < 0.0).float()
-            rel_diff = raw_labels.abs()
-            scale = rel_diff / self.max_rel_diff
-            margin = self.base_margin * scale
-
-            # ??? rel=0 ?????? margin ??? max_zero_margin_ratio * base_margin
-            if hasattr(self, "max_zero_margin_ratio"):
-                zero_ratio = float(self.max_zero_margin_ratio)
-                if zero_ratio < 1.0:
-                    zero_scale = torch.clamp(scale, max=zero_ratio)
-                    margin_zero = self.base_margin * zero_scale
-                    margin = torch.where(has_zero > 0, margin_zero, margin)
-
-            # ??? rel=0 ??????? 0 ?????????
-            if hasattr(self, "weight_zero") and hasattr(self, "weight_nonzero"):
-                if self.weight_zero != 1.0 or self.weight_nonzero != 1.0:
-                    weight_vec = torch.where(
-                        has_zero > 0,
-                        torch.full_like(raw_labels, float(self.weight_zero)),
-                        torch.full_like(raw_labels, float(self.weight_nonzero)),
-                    )
+        final_metrics: Dict[str, Dict[int, float]] = {}
+        for metric_name, k_dict in metrics.items():
+            final_metrics[metric_name] = {}
+            for k, values in k_dict.items():
+                if values:
+                    final_metrics[metric_name][k] = float(np.mean(values))
                 else:
-                    weight_vec = None
-            else:
-                weight_vec = None
+                    final_metrics[metric_name][k] = 0.0
 
-        # Broadcast margin ? batch ??
-        if not torch.is_tensor(margin):
-            margin = torch.full_like(sim_pos, float(margin))
-
-        losses_triplet = F.relu(margin + sim_neg - sim_pos)
-
-        # ??????????? loss ?????? 0 / ? 0 ????
-        if labels is not None and "weight_vec" in locals() and weight_vec is not None:
-            # ??????? losses_triplet ????
-            if weight_vec.shape != losses_triplet.shape:
-                weight_vec = weight_vec.view_as(losses_triplet)
-            losses_triplet = losses_triplet * weight_vec
-
-        loss_triplet = losses_triplet.mean()
-        if self.isotropy_weight > 0:
-            loss_iso = self._isotropy_regularization([anchor, positive, negative])
-            return loss_triplet + self.isotropy_weight * loss_iso
-        return loss_triplet
-
-
-# ==================== ????? ====================
-
-
-def plot_metrics_comparison(results: Dict[str, Dict[int, float]], save_path: str) -> None:
-    """???? K ???????? (MRR / NDCG / Recall / Precision)?"""
-
-    metrics = ["MRR", "NDCG", "Recall", "Precision"]
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("?? K ????????", fontsize=16, fontweight="bold")
-
-    for idx, metric in enumerate(metrics):
-        row = idx // 2
-        col = idx % 2
-        ax = axes[row, col]
-
-        if metric not in results:
-            ax.axis("off")
-            continue
-
-        k_values = sorted(results[metric].keys())
-        values = [results[metric][k] for k in k_values]
-
-        ax.plot(k_values, values, marker="o", linewidth=2, markersize=8)
-        ax.set_xlabel("K", fontsize=12)
-        ax.set_ylabel(f"{metric}@K", fontsize=12)
-        ax.set_title(f"{metric}@K", fontsize=14, fontweight="bold")
-        ax.grid(True, alpha=0.3)
-        ax.set_xticks(k_values)
-        ax.set_xticklabels([str(k) for k in k_values])
-
-        if values:
-            max_idx = int(np.argmax(values))
-            ax.annotate(
-                f"{values[max_idx]:.4f}",
-                xy=(k_values[max_idx], values[max_idx]),
-                xytext=(10, 10),
-                textcoords="offset points",
-                bbox=dict(boxstyle="round,pad=0.5", fc="yellow", alpha=0.7),
-                arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0"),
-            )
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"Metrics comparison plot saved to {save_path}")
-    plt.close()
-
-
-def plot_metrics_bar_chart(results: Dict[str, Dict[int, float]], k_value: int, save_path: str) -> None:
-    """???? K ????? (MRR / NDCG / Recall / Precision)?"""
-
-    metrics = ["MRR", "NDCG", "Recall", "Precision"]
-    values = [results.get(metric, {}).get(k_value, 0.0) for metric in metrics]
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#98D8C8"]
-    bars = ax.bar(metrics, values, color=colors, alpha=0.85, edgecolor="black", linewidth=1.2)
-
-    ax.set_ylabel("Score", fontsize=12, fontweight="bold")
-    ax.set_title(f"????? K={k_value} ????", fontsize=14, fontweight="bold")
-    ax.set_ylim(0, 1.0)
-    ax.grid(True, alpha=0.3, axis="y")
-
-    for bar, value in zip(bars, values):
-        height = bar.get_height()
-        ax.text(
-            bar.get_x() + bar.get_width() / 2.0,
-            height,
-            f"{value:.4f}",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            fontweight="bold",
-        )
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"Bar chart (K={k_value}) saved to {save_path}")
-    plt.close()
-
-
-def plot_metrics_heatmap(results: Dict[str, Dict[int, float]], save_path: str) -> None:
-    """????-K ???? (MRR / NDCG / Recall / Precision)?"""
-
-    metrics = ["MRR", "NDCG", "Recall", "Precision"]
-    if not results or "MRR" not in results or not results["MRR"]:
-        print("No results to plot heatmap.")
-        return
-
-    k_values = sorted(results["MRR"].keys())
-
-    data = np.zeros((len(metrics), len(k_values)), dtype=float)
-    for i, metric in enumerate(metrics):
-        for j, k in enumerate(k_values):
-            data[i, j] = results.get(metric, {}).get(k, 0.0)
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-    im = ax.imshow(data, cmap="YlOrRd", aspect="auto")
-
-    ax.set_xticks(np.arange(len(k_values)))
-    ax.set_yticks(np.arange(len(metrics)))
-    ax.set_xticklabels([f"K={k}" for k in k_values])
-    ax.set_yticklabels(metrics)
-
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-
-    for i in range(len(metrics)):
-        for j in range(len(k_values)):
-            ax.text(j, i, f"{data[i, j]:.3f}", ha="center", va="center", color="black", fontsize=9)
-
-    ax.set_title("?????????", fontsize=14, fontweight="bold")
-    fig.colorbar(im, ax=ax, label="Score")
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"Heatmap saved to {save_path}")
-    plt.close()
-
-
-# ==================== ????? ====================
-
-
-def main() -> None:
-    print("=" * 80)
-    print("Runway ?????? (SBERT)")
-    print("  ??: sbert-base-nli-mean-tokens")
-    print("  ??: runway-final")
-    print("=" * 80)
-
-    # ????
-    MODEL_PATH = os.path.abspath(os.path.join("models","sbert-base-nli-mean-tokens"))
-    DATA_DIR = os.path.join("runway-final")
-    OUTPUT_DIR = os.path.join("output-xiaorong","zong")
-    DOMAIN_KB_DIR = os.path.join( "domain_kb")
-
-    # ?????
-    BATCH_SIZE = 48
-    EPOCHS = 100  # ????????????
-    EVAL_BATCH_SIZE = 128
-    USE_FAISS = FAISS_AVAILABLE
-
-    # Scheme-A three-stage settings
-    ENABLE_THREE_STAGE = True
-    GEOMETRY_RANK = 192
-    GEOMETRY_ALPHA = 0.0
-    ISOTROPY_WEIGHT = 0.02
-    BM25_TOPK = 30
-    DOMAIN_SEM_TOPK = 4
-
-    # Efficiency analysis settings
-    ENABLE_EFFICIENCY_LOG = True
-    EFFICIENCY_WARMUP_RATIO = 0.05
-    EFFICIENCY_ROUND_DIGITS = 6
-
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    # 1. ????
-    print("\n" + "=" * 80)
-    print("Loading Runway data ...")
-    print("=" * 80)
-
-    loader = RunwayDataLoader(DATA_DIR)
-
-    corpus = loader.load_corpus()
-    queries = loader.load_queries()
-
-    train_qrels = loader.load_split_qrels("train")
-    dev_qrels = loader.load_split_qrels("dev")
-    test_qrels = loader.load_split_qrels("test")
-
-    # 2. ??????
-    print("\n" + "=" * 80)
-    print("Loading local SentenceTransformer model ...")
-    print("=" * 80)
-
-    if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(f"???????: {MODEL_PATH}")
-
-    model = SentenceTransformer(MODEL_PATH, device=device, local_files_only=True)
-    print(f"  Model loaded from {MODEL_PATH}")
-
-    if ENABLE_THREE_STAGE:
-        model = enable_three_stage_encoder(
-            model,
-            rank_size=GEOMETRY_RANK,
-            alpha=GEOMETRY_ALPHA,
-        )
-        print(
-            "  Three-stage encoder enabled: Transformer -> GeometryBridge -> "
-            "MultiViewPooling"
-        )
-
-    domain_kb = DomainKnowledgeBase.from_dir(DOMAIN_KB_DIR)
-    fusion_module = DomainVectorFusion(hidden_size=model.get_sentence_embedding_dimension())
-    enhanced_model = DomainEnhancedEncoder(
-        base_model=model,
-        knowledge_base=domain_kb,
-        fusion_module=fusion_module,
-        lexical_top_k=BM25_TOPK,
-        semantic_top_k=DOMAIN_SEM_TOPK,
-    )
-    print(
-        f"  Domain KB enabled: BM25 top-{BM25_TOPK} prefilter -> "
-        f"semantic top-{DOMAIN_SEM_TOPK} -> dynamic weighted fusion"
-    )
-
-    # ???????????? Top-K ??????? hard negative???? rel=0?
-    # ?????????? vs ???????Top-K ??????
-    train_queries_text = {qid: queries[qid] for qid in train_qrels.keys() if qid in queries}
-    train_query_text_values = list(train_queries_text.values())
-    train_lexical_cache = domain_kb.build_lexical_cache(
-        query_texts=train_query_text_values,
-        lexical_top_k=BM25_TOPK,
-    )
-    print(f"  Offline BM25 cache built for {len(train_lexical_cache)} unique train queries")
-
-    # 3. ??????? (?? dev ?????????? InformationRetrievalEvaluator)
-    dev_queries_for_eval = {qid: queries[qid] for qid in dev_qrels.keys() if qid in queries}
-
-    val_evaluator = InformationRetrievalEvaluator(
-        queries=dev_queries_for_eval,
-        corpus=corpus,
-        relevant_docs=dev_qrels,
-        name="validation",
-        batch_size=EVAL_BATCH_SIZE,
-        ndcg_at_k=[10],
-    )
-
-    # 4. ?????????? Triplet Loss ??????
-    print("\n" + "=" * 80)
-    print("Start training ...")
-    print("=" * 80)
-
-    train_loss = RelevanceAwareTripletLoss(
-        model,
-        knowledge_base=domain_kb,
-        fusion_module=fusion_module,
-        lexical_cache=train_lexical_cache,
-        lexical_top_k=BM25_TOPK,
-        semantic_top_k=DOMAIN_SEM_TOPK,
-        base_margin=0.25,
-        max_rel_diff=4.0,
-        isotropy_weight=ISOTROPY_WEIGHT,
-    )
-
-    mining_stages = 3
-    epochs_per_stage = max(1, EPOCHS // mining_stages)
-
-    efficiency_metrics: Dict[str, Any] = {
-        "enabled": ENABLE_EFFICIENCY_LOG,
-        "warmup_ratio": EFFICIENCY_WARMUP_RATIO,
-        "stages": [],
-    }
-
-    for stage in range(mining_stages):
-        print(f"\n----- Hard negative mining stage {stage + 1}/{mining_stages} -----")
-
-        stage_t0 = time.perf_counter()
-        mine_t0 = time.perf_counter()
-        topk_docs_train = mine_topk_docs_for_queries(
-            enhanced_model,
-            corpus,
-            train_queries_text,
-            top_k=100,
-            batch_size=EVAL_BATCH_SIZE,
-            use_faiss=USE_FAISS,
-        )
-        mine_seconds = time.perf_counter() - mine_t0
-
-        # ??????? Top-K ???????????????????? hard zero ????????
-        sample_t0 = time.perf_counter()
-        train_samples = loader.create_relevance_triplet_samples(
-            "train",
-            max_triplets_per_query=200,
-            topk_docs=topk_docs_train,
-        )
-        train_loader = DataLoader(train_samples, shuffle=True, batch_size=BATCH_SIZE)
-        sample_build_seconds = time.perf_counter() - sample_t0
-
-        total_steps = len(train_loader) * epochs_per_stage if len(train_loader) > 0 else 0
-        warmup_steps = int(EFFICIENCY_WARMUP_RATIO * total_steps) if total_steps > 0 else 0
-        print(f"Stage {stage + 1}: Total steps: {total_steps} | Warmup steps: {warmup_steps}")
-
-        if total_steps <= 0:
-            print("Warning: no training samples found for this stage, skip training phase.")
-            continue
-
-        fit_t0 = time.perf_counter()
-        model.fit(
-            train_objectives=[(train_loader, train_loss)],
-            epochs=epochs_per_stage,
-            warmup_steps=warmup_steps,
-            evaluator=val_evaluator,
-            evaluation_steps=max(1, len(train_loader)),
-            output_path=OUTPUT_DIR,
-            save_best_model=True,
-            show_progress_bar=True,
-            optimizer_params={"lr": 4e-5},
-        )
-        train_fit_seconds = time.perf_counter() - fit_t0
-        stage_seconds = time.perf_counter() - stage_t0
-
-        effective_steps = max(1, total_steps - warmup_steps)
-        samples_per_step = BATCH_SIZE
-        stage_metrics = {
-            "stage": stage + 1,
-            "mine_seconds": round(mine_seconds, EFFICIENCY_ROUND_DIGITS),
-            "sample_build_seconds": round(sample_build_seconds, EFFICIENCY_ROUND_DIGITS),
-            "train_fit_seconds": round(train_fit_seconds, EFFICIENCY_ROUND_DIGITS),
-            "stage_total_seconds": round(stage_seconds, EFFICIENCY_ROUND_DIGITS),
-            "total_steps": int(total_steps),
-            "warmup_steps": int(warmup_steps),
-            "effective_steps": int(effective_steps),
-            "train_step_latency_ms": round((train_fit_seconds / effective_steps) * 1000.0, EFFICIENCY_ROUND_DIGITS),
-            "steps_per_sec": round(effective_steps / max(train_fit_seconds, 1e-12), EFFICIENCY_ROUND_DIGITS),
-            "samples_per_sec": round((effective_steps * samples_per_step) / max(train_fit_seconds, 1e-12), EFFICIENCY_ROUND_DIGITS),
-            "train_samples": int(len(train_samples)),
-            "bm25_topk": int(BM25_TOPK),
-            "fusion_topk": int(DOMAIN_SEM_TOPK),
-        }
-        efficiency_metrics["stages"].append(stage_metrics)
-        print("Stage efficiency:", json.dumps(stage_metrics, ensure_ascii=False))
-
-    if efficiency_metrics["stages"]:
-        total_mine = sum(s["mine_seconds"] for s in efficiency_metrics["stages"])
-        total_sample = sum(s["sample_build_seconds"] for s in efficiency_metrics["stages"])
-        total_fit = sum(s["train_fit_seconds"] for s in efficiency_metrics["stages"])
-        total_stage = sum(s["stage_total_seconds"] for s in efficiency_metrics["stages"])
-        total_effective_steps = sum(int(s["effective_steps"]) for s in efficiency_metrics["stages"])
-        efficiency_metrics["summary"] = {
-            "mine_seconds_total": round(total_mine, EFFICIENCY_ROUND_DIGITS),
-            "sample_build_seconds_total": round(total_sample, EFFICIENCY_ROUND_DIGITS),
-            "train_fit_seconds_total": round(total_fit, EFFICIENCY_ROUND_DIGITS),
-            "stage_total_seconds": round(total_stage, EFFICIENCY_ROUND_DIGITS),
-            "avg_train_step_latency_ms": round((total_fit / max(total_effective_steps, 1)) * 1000.0, EFFICIENCY_ROUND_DIGITS),
-            "avg_steps_per_sec": round(total_effective_steps / max(total_fit, 1e-12), EFFICIENCY_ROUND_DIGITS),
-            "avg_samples_per_sec": round((total_effective_steps * BATCH_SIZE) / max(total_fit, 1e-12), EFFICIENCY_ROUND_DIGITS),
-        }
-
-    print(f"Training complete. Best model saved to {OUTPUT_DIR}")
-    fusion_path = os.path.join(OUTPUT_DIR, "domain_fusion.pt")
-    torch.save(fusion_module.state_dict(), fusion_path)
-    print(f"Domain fusion weights saved to {fusion_path}")
-
-    # 5. ?????????????????
-    print("\n" + "=" * 80)
-    print("Evaluating best model on test set ...")
-    print("=" * 80)
-
-    best_model = SentenceTransformer(OUTPUT_DIR, device=device, local_files_only=True)
-    best_fusion_module = DomainVectorFusion(hidden_size=best_model.get_sentence_embedding_dimension())
-    if not os.path.exists(fusion_path):
-        raise FileNotFoundError(f"domain_fusion.pt not found for evaluation: {fusion_path}")
-    best_fusion_state = torch.load(fusion_path, map_location=device)
-    best_fusion_module.load_state_dict(best_fusion_state)
-    print(f"Loaded domain fusion weights from {fusion_path}")
-    best_enhanced_model = DomainEnhancedEncoder(
-        base_model=best_model,
-        knowledge_base=domain_kb,
-        fusion_module=best_fusion_module,
-        lexical_top_k=BM25_TOPK,
-        semantic_top_k=DOMAIN_SEM_TOPK,
-    )
-
-    test_evaluator = OptimizedRetrievalEvaluator(
-        corpus=corpus,
-        queries=queries,
-        qrels=test_qrels,
-        batch_size=EVAL_BATCH_SIZE,
-        use_faiss=USE_FAISS,
-    )
-
-    k_values = [1, 3, 5, 10, 20]
-    results = test_evaluator.evaluate(best_enhanced_model, k_values=k_values)
-
-    # ???????
-    print("\nTest set retrieval results:")
-    print(json.dumps(results, indent=2, ensure_ascii=False))
-
-    results_path = os.path.join(OUTPUT_DIR, "evaluation_results.json")
-    with open(results_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-    print(f"Results saved to {results_path}")
-
-    if ENABLE_EFFICIENCY_LOG:
-        efficiency_path = os.path.join(OUTPUT_DIR, "efficiency_metrics.json")
-        with open(efficiency_path, "w", encoding="utf-8") as f:
-            json.dump(efficiency_metrics, f, indent=2, ensure_ascii=False)
-        print(f"Efficiency metrics saved to {efficiency_path}")
-
-    # 6. ???: ???? MRR / NDCG / Recall / Precision ????
-    print("\n" + "=" * 80)
-    print("Visualizing metrics ...")
-    print("=" * 80)
-
-    comparison_path = os.path.join(OUTPUT_DIR, "metrics_comparison.png")
-    plot_metrics_comparison(results, comparison_path)
-
-    bar_k10_path = os.path.join(OUTPUT_DIR, "metrics_bar_k10.png")
-    plot_metrics_bar_chart(results, k_value=10, save_path=bar_k10_path)
-
-    bar_k3_path = os.path.join(OUTPUT_DIR, "metrics_bar_k3.png")
-    plot_metrics_bar_chart(results, k_value=3, save_path=bar_k3_path)
-
-    heatmap_path = os.path.join(OUTPUT_DIR, "metrics_heatmap.png")
-    plot_metrics_heatmap(results, heatmap_path)
-
-    print("\nAll visualizations saved in:")
-    print(f"  {OUTPUT_DIR}")
-
-
-
-if __name__ == "__main__":
-    main()
+        return final_metrics
