@@ -418,7 +418,7 @@ class DomainEnhancedEncoder:
 
 
 class RunwayDataLoader:
-    def __init__(self, data_dir: str = os.path.join("retrieval", "runway-1")):
+    def __init__(self, data_dir: str = os.path.join("retrieval", "runway")):
         self.data_dir = data_dir
         self.corpus: Dict[str, str] = {}
         self.queries: Dict[str, str] = {}
